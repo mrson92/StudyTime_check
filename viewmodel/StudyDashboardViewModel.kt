@@ -1,190 +1,119 @@
-// File: viewmodel/StudyDashboardViewModel.kt (Kotlin)
 package com.example.studytimeapp.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.studytimeapp.core.StudySessionUseCase
-import com.example.studytimeapp.core.Subject
-import com.example.studytimeapp.core.Session
+import com.example.studytimeapp.core.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.util.Date
 
-/**
- * @brief 학습 대시보드 화면의 상태를 관리하는 ViewModel.
- *
- * 이 ViewModel은 UseCase를 통해 비즈니스 로직을 처리하고, UI가 관찰할 수 있는 StateFlow를 노출합니다.
- */
 class StudyDashboardViewModel : ViewModel() {
 
     private val useCase = StudySessionUseCase()
+    private var timerJob: Job? = null
 
-    // --- 1. 상태 관리 (StateFlow) ---
+    data class SubjectStat(
+        val subject: Subject,
+        val currentDurationSec: Long,
+        val actualPercent: Int
+    )
 
-    /** 전체 앱의 핵심 상태를 담는 Sealed Class 또는 Data Class 사용 권장 */
+    // 전체 대시보드 상태 (정적/비동기 데이터 위주)
     data class DashboardState(
         val subjects: List<Subject> = emptyList(),
         val sessions: List<Session> = emptyList(),
-        val isSynced: Boolean = false,
-        val isSyncing: Boolean = false,
-        val peerData: Map<Int, com.example.studytimeapp.core.PeerData>? = null,
-        val timerState: TimerState = TimerState()
+        val stats: List<SubjectStat> = emptyList(),
+        val recommendedSubject: Subject? = null,
+        val isSyncing: Boolean = false
     )
 
+    // 타이머 전용 상태 (매초 변경되는 고빈도 데이터)
     data class TimerState(
         val isRunning: Boolean = false,
         val subjectId: Int? = null,
-        val elapsedSec: Long = 0L,
-        val startTime: Date? = null
+        val elapsedSec: Long = 0L
     )
 
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state.asStateFlow()
 
-    // --- 2. 초기화 및 데이터 로드 ---
+    private val _timerState = MutableStateFlow(TimerState())
+    val timerState: StateFlow<TimerState> = _timerState.asStateFlow()
 
     init {
-        // 웹에서 가져온 Mock 데이터를 사용하여 초기 상태 설정 (실제로는 Repository에서 주입받아야 함)
         loadInitialData()
     }
 
     private fun loadInitialData() {
         viewModelScope.launch {
-            // 1. Subject 데이터 로드 (Mocking)
             val initialSubjects = listOf(
                 Subject(id = 101, name = "국어", colorHex = "#EF4444", targetPercent = 30),
                 Subject(id = 102, name = "수학", colorHex = "#3B82F6", targetPercent = 40),
                 Subject(id = 103, name = "영어", colorHex = "#F59E0B", targetPercent = 30)
             )
-            // 로컬 저장소에서 세션 로드 (실제로는 DataStore 사용 권장)
-            val savedSessionsJson = getMockSavedSessions() // Mock 함수 호출
-            val initialSessions = savedSessionsJson.map { it as Session }
-
-            _state.value = DashboardState(
-                subjects = initialSubjects,
-                sessions = initialSessions,
-                isSynced = false,
-                isSyncing = false
-            )
+            _state.update { it.copy(subjects = initialSubjects) }
+            updateDashboardStats()
         }
     }
 
-    // --- 3. 타이머 로직 (Timer Management) ---
+    // --- 타이머 제어 (이제 _timerState만 업데이트함) ---
 
-    /**
-     * @brief 타이머를 시작하거나 재개합니다.
-     */
-    fun startOrResumeTimer(subjectId: Int) {
-        if (_state.value.timerState.isRunning && _state.value.timerState.subjectId == subjectId) return // 이미 실행 중이면 무시
+    fun startTimer(subjectId: Int) {
+        if (_timerState.value.isRunning) stopTimer()
 
-        _state.update { currentState ->
-            currentState.copy(
-                timerState = TimerState(
-                    isRunning = true,
-                    subjectId = subjectId,
-                    elapsedSec = 0L,
-                    startTime = Date()
-                )
-            )
-        }
-        // 타이머 로직은 별도의 Coroutine Scope에서 주기적으로 실행되어야 함 (실제 구현 시 필요)
-    }
-
-    /**
-     * @brief 타이머를 일시정지합니다.
-     */
-    fun pauseTimer() {
-        _state.update { currentState ->
-            currentState.copy(timerState = currentState.timerState.copy(isRunning = false))
-        }
-    }
-
-    /**
-     * @brief 타이머를 중지하고, 현재까지의 기록을 세션 목록에 추가합니다.
-     */
-    fun stopTimer() {
-        val currentSubjectId = _state.value.timerState.subjectId ?: return
-        val elapsedSec = _state.value.timerState.elapsedSec
-
-        if (elapsedSec > 0) {
-            // UseCase를 사용하여 새로운 세션 기록 생성
-            val newSession = useCase.createNewSessionRecord(currentSubjectId, elapsedSec)
-            _state.update { currentState ->
-                currentState.copy(sessions = currentState.sessions + newSession)
+        _timerState.update { TimerState(isRunning = true, subjectId = subjectId) }
+        
+        timerJob?.cancel()
+        timerJob = viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                _timerState.update { s ->
+                    s.copy(elapsedSec = s.elapsedSec + 1)
+                }
             }
         }
-
-        // 타이머 상태 초기화
-        _state.update { currentState ->
-            currentState.copy(timerState = TimerState())
-        }
     }
 
-    // --- 4. 동기화 및 분석 로직 (Sync & Analysis) ---
-
-    /**
-     * @brief 서버와 데이터를 동기화하고 피어 그룹 비교 데이터를 가져옵니다.
-     */
-    fun syncDataAndAnalyze() {
-        viewModelScope.launch {
-            _state.update { it.copy(isSyncing = true, isSynced = false) }
-
-            // 1. Mock Network Call (서버 통신 시뮬레이션)
-            kotlinx.coroutines.delay(1500) // 네트워크 지연 모사
-
-            // 2. 피어 데이터 로드 및 상태 업데이트
-            val peerDataMap = mapOf(
-                101 to com.example.studytimeapp.core.PeerData(avgDurationSec = 7200),
-                102 to com.example.studytimeapp.core.PeerData(avgDurationSec = 10800),
-                103 to com.example.studytimeapp.core.PeerData(avgDurationSec = 5400)
-            )
-
-            _state.update { it.copy(isSynced = true, peerData = peerDataMap, isSyncing = false) }
+    fun stopTimer() {
+        timerJob?.cancel()
+        val currentTimer = _timerState.value
+        
+        if (currentTimer.subjectId != null && currentTimer.elapsedSec > 0) {
+            val newSession = useCase.createNewSessionRecord(currentTimer.subjectId, currentTimer.elapsedSec)
+            _state.update { it.copy(sessions = it.sessions + newSession) }
+            updateDashboardStats()
         }
+
+        _timerState.update { TimerState() }
     }
 
-    /**
-     * @brief 대시보드 통계 데이터를 계산하고 상태를 업데이트합니다. (가장 중요한 비즈니스 로직 호출 지점)
-     */
-    fun updateDashboardStats() {
+    private fun updateDashboardStats() {
         val currentState = _state.value
-        if (!currentState.isSynced || currentState.subjects.isEmpty()) return
 
-        // 1. UseCase를 사용하여 통계 계산
-        val totalTime = useCase.calculateTotalStudyTime(currentState.sessions)
+        // 1. 세션 전체를 한 번만 순회하여 요약 맵 생성 (O(N))
+        val summary = useCase.summarizeSessions(currentState.sessions)
+        val totalTime = useCase.calculateTotalStudyTimeFromSummary(summary)
 
-        // 2. 추천 과목 로직 실행 (가장 중요한 비즈니스 규칙 적용)
-        val recommendedId = useCase.recommendSubject(
-            subjects = currentState.subjects,
-            sessions = currentState.sessions,
-            peerData = currentState.peerData
-        )
-
-        // 3. 새로운 통계 데이터 구조체 생성 및 상태 업데이트 (이 부분이 View에서 사용될 핵심 결과물)
+        // 2. 요약된 데이터를 바탕으로 통계 생성 (O(M))
         val newStats = currentState.subjects.map { subject ->
-            val myDuration = useCase.calculateSubjectDuration(currentState.sessions, subject.id);
-            val actualPercent = useCase.calculatePercentage(totalTime, myDuration);
-
-            // 피어 데이터가 있다면 이를 사용하고, 없다면 0으로 처리
-            val peerAvg = currentState.peerData?.get(subject.id)?.avgDurationSec ?: 0L;
-
-            Triple(
-                subject, // Subject 객체 자체
-                myDuration,
-                actualPercent
-            )
+            val duration = summary[subject.id] ?: 0L
+            val percent = useCase.calculatePercentage(totalTime, duration)
+            SubjectStat(subject, duration, percent)
         }
 
-        // 실제 View에서는 이 리스트를 기반으로 UI 컴포넌트를 재렌더링합니다.
-        println("--- [DEBUG] Dashboard Stats Calculated ---")
-        println("Total Time: ${totalTime / 3600}시간, Recommended Subject ID: $recommendedId")
+        // 3. 요약 데이터를 추천 로직에 전달
+        val recommended = useCase.recommendSubject(currentState.subjects, summary)
+
+        _state.update { it.copy(stats = newStats, recommendedSubject = recommended) }
     }
 
-    // --- Mocking Functions (실제 환경에서는 Repository/DataStore에서 주입받아야 함) ---
-    private fun getMockSavedSessions(): List<Session> {
-        return listOf(
-            Session(id = 1, subjectId = 101, durationSec = 5400L), // 1.5시간
-            Session(id = 2, subjectId = 102, durationSec = 3600L)  // 1시간
-        )
+    fun syncData() {
+        viewModelScope.launch {
+            _state.update { it.copy(isSyncing = true) }
+            delay(1000)
+            _state.update { it.copy(isSyncing = false) }
+            updateDashboardStats()
+        }
     }
 }

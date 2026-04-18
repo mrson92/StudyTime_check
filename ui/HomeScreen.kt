@@ -1,186 +1,165 @@
-// File: ui/HomeScreen.kt (Kotlin)
 package com.example.studytimeapp.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.studytimeapp.viewmodel.StudyDashboardViewModel
-import com.example.studytimeapp.viewmodel.StudyDashboardViewModel.DashboardState
 
-/**
- * @brief 메인 대시보드 화면 컴포넌트 (View Layer).
- *
- * ViewModel의 StateFlow를 관찰하여 UI를 렌더링합니다.
- */
 @Composable
 fun HomeScreen(viewModel: StudyDashboardViewModel = viewModel()) {
-    // ViewModel의 상태를 관찰합니다. 이 부분이 View와 ViewModel을 연결하는 핵심입니다.
-    val state by viewModel.state.collectAsState()
+    // 1. 상태 분리 구독
+    val dashboardState by viewModel.state.collectAsState()
+    val timerState by viewModel.timerState.collectAsState()
 
-    // 타이머가 실행 중일 때 오버레이 모달이 뜰지 여부를 결정합니다.
-    val isTimerRunning = state.timerState.isRunning
-
-    if (isTimerRunning) {
-        StudyTimerOverlay(viewModel = viewModel, state = state.timerState)
+    if (timerState.isRunning) {
+        // 타이머 화면: timerState만 사용함
+        StudyTimerOverlay(
+            timerState = timerState,
+            onStop = { viewModel.stopTimer() }
+        )
     } else {
-        // 타이머가 실행 중이 아닐 때의 메인 UI 렌더링
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header는 상단에 고정되어 있다고 가정하고 생략하거나 별도 컴포넌트로 분리합니다.
-            DashboardContent(state = state)
-        }
+        // 대시보드 화면: dashboardState만 사용함
+        // 타이머가 업데이트되어도 DashboardContent 내부의 정적 요소들은 리컴포지션되지 않음
+        DashboardContent(
+            state = dashboardState,
+            onStartTimer = { subjectId -> viewModel.startTimer(subjectId) },
+            onSync = { viewModel.syncData() }
+        )
     }
 }
 
-/**
- * @brief 타이머가 실행 중일 때 표시되는 오버레이 모달입니다.
- */
 @Composable
-fun StudyTimerOverlay(viewModel: StudyDashboardViewModel, state: StudyDashboardViewModel.TimerState) {
-    // 이 컴포넌트는 화면 전체를 덮는 전역 오버레이 역할을 합니다.
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .background(Color.Black.copy(alpha = 0.95f)) // 배경 어둡게 처리
-                .align(Alignment.Center)
-        ) {
-            // 타이머 시간 표시 (가장 중요)
+fun StudyTimerOverlay(
+    timerState: StudyDashboardViewModel.TimerState,
+    onStop: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "시간 계산 중...", // 실제로는 ViewModel에서 포맷된 시간을 받아와야 함
-                style = androidx.compose.ui.text.TextStyle(fontSize = 72.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Light)
+                text = formatTime(timerState.elapsedSec),
+                color = Color.White,
+                fontSize = 80.sp,
+                fontWeight = FontWeight.Bold
             )
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // 제어 버튼 그룹
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround
+            Spacer(modifier = Modifier.height(40.dp))
+            Button(
+                onClick = onStop,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
             ) {
-                // 일시정지 버튼 (Pause)
-                Button(onClick = { viewModel.pauseTimer() }) {
-                    Text("일시정지")
-                }
-                // 중지 버튼 (Stop)
-                Button(onClick = { viewModel.stopTimer() }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) {
-                    Text("중지 및 저장")
-                }
+                Text("공부 중단", color = Color.White)
             }
         }
     }
 }
 
-/**
- * @brief 타이머가 비활성화 상태일 때 표시되는 메인 대시보드 콘텐츠입니다.
- */
 @Composable
-fun DashboardContent(state: DashboardState) {
-    Column(modifier = Modifier.padding(16.dp)) {
-        // 1. 인사이트 카드 (상단 고정 영역)
-        Card(modifier = Modifier.fillMaxWidth().shadow(elevation = 4.dp, shape = RoundedCornerShape(20.dp))) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text("스마트 인사이트", style = MaterialTheme.typography.headlineSmall)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("오늘도 힘차게 공부를 시작해볼까요?", style = androidx.compose.ui.text.TextStyle(color = Color.Gray))
-            }
-        }
-
-        // 2. 과목별 요약 및 퀵스타트 (가장 중요한 재사용 영역)
-        Column(modifier = Modifier.padding(top = 16.dp)) {
-            Text("오늘의 학습 현황", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 과목별 요약 컴포넌트 (재사용 가능한 패턴)
-            state.subjects.forEach { subject ->
-                SubjectSummaryCard(subject = subject, sessionDurationSec = useCase.calculateSubjectDuration(state.sessions, subject.id), totalTime = state.sessions.sumOf { it.durationSec })
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-
-        // 3. 통계 및 피어 비교 (재사용 가능한 패턴)
-        if (state.isSynced && state.peerData != null) {
-            Text("피어 그룹 비교", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            PeerComparisonChart(state.subjects, state.sessions, state.peerData!!)
-        } else if (!state.isSyncing && !state.isSynced) {
-            // 동기화 전 안내 메시지 (View에서 상태에 따라 렌더링 제어)
-            Text("데이터를 로드하고 분석하려면 '데이터 동기화 및 비교하기' 버튼을 눌러주세요.", color = Color.Gray)
-        }
-    }
-}
-
-/**
- * @brief 개별 과목의 학습 현황을 보여주는 재사용 가능한 컴포넌트입니다.
- */
-@Composable
-fun SubjectSummaryCard(subject: com.example.studytimeapp.core.Subject, sessionDurationSec: Long, totalTime: Long) {
-    val actualPercent = if (totalTime == 0L) 0 else ((sessionDurationSec.toDouble() / totalTime.toDouble()) * 100).toInt().coerceAtMost(100)
-
-    Card(modifier = Modifier.fillMaxWidth().shadow(elevation = 2.dp, shape = RoundedCornerShape(12.dp))) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // 과목명 및 타이머 버튼 영역
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(color = subject.colorHex.toColor()) // 색상으로 표시
+fun DashboardContent(
+    state: StudyDashboardViewModel.DashboardState,
+    onStartTimer: (Int) -> Unit,
+    onSync: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // 인사이트 섹션 (타이머 업데이트 시에도 다시 그려지지 않음)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("오늘의 추천", style = MaterialTheme.typography.titleMedium)
+                val recommended = state.recommendedSubject
+                Text(
+                    text = if (recommended != null) "${recommended.name} 과목이 가장 부족해요!" else "학습 데이터를 쌓아보세요.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.Gray
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "${subject.name} 학습 현황", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.weight(1f))
-
-                // 퀵스타트 버튼 (재사용 가능한 액션 패턴)
-                Button(onClick = { /* TODO: ViewModel 호출 */ }) {
-                    Text("지금 시작")
-                }
             }
+        }
 
+        Text("과목별 학습 현황", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 과목 리스트
+        state.stats.forEach { stat ->
+            SubjectCard(stat = stat, onStart = { onStartTimer(stat.subject.id) })
             Spacer(modifier = Modifier.height(12.dp))
+        }
 
-            // 진행률 바 영역
-            Column {
-                Text("진행률", style = MaterialTheme.typography.bodySmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .background(color = Color.Gray.copy(alpha = 0.2f))
-                ) {
-                    // 진행률 바 (핵심 시각화 로직)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(remember { mutableStateOf(actualPercent.toFloat()) }) // 실제로는 State를 받아와야 함
-                            .background(color = Color(android.graphics.Color.parseColor(subject.colorHex)))
-                    ) {}
-                }
-            }
+        Spacer(modifier = Modifier.weight(1f))
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("목표 대비: ${actualPercent}% / 목표: ${subject.targetPercent}%", style = MaterialTheme.typography.bodySmall)
+        Button(
+            onClick = onSync,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.isSyncing
+        ) {
+            Text(if (state.isSyncing) "동기화 중..." else "데이터 동기화")
         }
     }
 }
 
-/**
- * @brief 피어 그룹 비교 차트 컴포넌트 (재사용 가능한 시각화 패턴).
- */
 @Composable
-fun PeerComparisonChart(subjects: List<com.example.studytimeapp.core.Subject>, sessions: List<com.example.studytimeapp.core.Session>, peerDataMap: Map<Int, com.example.studytimeapp.core.PeerData>) {
-    // 이 컴포넌트는 ViewModel에서 계산된 데이터를 받아와서 차트를 그립니다.
-    // 실제 구현에서는 Charting 라이브러리 사용을 고려해야 합니다.
+fun SubjectCard(
+    stat: StudyDashboardViewModel.SubjectStat,
+    onStart: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stat.subject.name, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text(
+                    "오늘 공부: ${formatTime(stat.currentDurationSec)} (${stat.actualPercent}%)",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                LinearProgressIndicator(
+                    progress = stat.actualPercent / 100f,
+                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    color = Color(android.graphics.Color.parseColor(stat.subject.colorHex)),
+                    trackColor = Color.LightGray.copy(alpha = 0.3f)
+                )
+            }
+            
+            IconButton(onClick = onStart) {
+                Text("▶", fontSize = 24.sp)
+            }
+        }
+    }
 }
 
-/**
- * @brief 색상 Hex 코드를 Compose Color 객체로 변환하는 확장 함수 (유틸리티)
- */
-fun String.toColor(): androidx.compose.ui.graphics.Color {
-    return try {
-        android.graphics.Color.parseColor(this)
-    } catch (e: Exception) {
-        androidx.compose.ui.graphics.Color.Gray
-    }
+fun formatTime(seconds: Long): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return "%02d:%02d:%02d".format(h, m, s)
 }
