@@ -1,14 +1,16 @@
 package com.example.studytimeapp.viewmodel
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.studytimeapp.core.*
+import com.example.studytimeapp.data.StudyDao
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-class StudyDashboardViewModel : ViewModel() {
+class StudyDashboardViewModel(private val studyDao: StudyDao) : ViewModel() {
 
     private val useCase = StudySessionUseCase()
     private var timerJob: Job? = null
@@ -41,18 +43,39 @@ class StudyDashboardViewModel : ViewModel() {
     val timerState: StateFlow<TimerState> = _timerState.asStateFlow()
 
     init {
-        loadInitialData()
+        observeDatabase()
+        ensureInitialSubjects()
     }
 
-    private fun loadInitialData() {
+    private fun observeDatabase() {
+        // Observe subjects
+        studyDao.getAllSubjects()
+            .onEach { subjects ->
+                _state.update { it.copy(subjects = subjects) }
+                updateDashboardStats()
+            }
+            .launchIn(viewModelScope)
+
+        // Observe sessions
+        studyDao.getAllSessions()
+            .onEach { sessions ->
+                _state.update { it.copy(sessions = sessions) }
+                updateDashboardStats()
+            }
+            .launchIn(viewModelScope)
+    }
+
+    private fun ensureInitialSubjects() {
         viewModelScope.launch {
-            val initialSubjects = listOf(
-                Subject(id = 101, name = "국어", colorHex = "#EF4444", targetPercent = 30),
-                Subject(id = 102, name = "수학", colorHex = "#3B82F6", targetPercent = 40),
-                Subject(id = 103, name = "영어", colorHex = "#F59E0B", targetPercent = 30)
-            )
-            _state.update { it.copy(subjects = initialSubjects) }
-            updateDashboardStats()
+            val subjects = studyDao.getAllSubjects().first()
+            if (subjects.isEmpty()) {
+                val initialSubjects = listOf(
+                    Subject(id = 101, name = "국어", colorHex = "#EF4444", targetPercent = 30),
+                    Subject(id = 102, name = "수학", colorHex = "#3B82F6", targetPercent = 40),
+                    Subject(id = 103, name = "영어", colorHex = "#F59E0B", targetPercent = 30)
+                )
+                studyDao.insertSubjects(initialSubjects)
+            }
         }
     }
 
@@ -83,8 +106,9 @@ class StudyDashboardViewModel : ViewModel() {
         
         if (currentTimer.subjectId != null && currentTimer.elapsedSec > 0) {
             val newSession = useCase.createNewSessionRecord(currentTimer.subjectId, currentTimer.elapsedSec)
-            _state.update { it.copy(sessions = it.sessions + newSession) }
-            updateDashboardStats()
+            viewModelScope.launch {
+                studyDao.insertSession(newSession)
+            }
         }
 
         _timerState.update { TimerState() }
@@ -106,12 +130,34 @@ class StudyDashboardViewModel : ViewModel() {
         _state.update { it.copy(stats = newStats, recommendedSubject = recommended) }
     }
 
+    fun addSubject(name: String, colorHex: String, targetPercent: Int) {
+        viewModelScope.launch {
+            val newSubject = Subject(
+                id = (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                name = name,
+                colorHex = colorHex,
+                targetPercent = targetPercent
+            )
+            studyDao.insertSubject(newSubject)
+        }
+    }
+
     fun syncData() {
         viewModelScope.launch {
             _state.update { it.copy(isSyncing = true) }
             delay(1000)
             _state.update { it.copy(isSyncing = false) }
             updateDashboardStats()
+        }
+    }
+
+    class Factory(private val studyDao: StudyDao) : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(StudyDashboardViewModel::class.java)) {
+                @Suppress("UNCHECKED_CAST")
+                return StudyDashboardViewModel(studyDao) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class")
         }
     }
 }

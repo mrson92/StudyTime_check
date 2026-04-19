@@ -1,5 +1,8 @@
 package com.example.studytimeapp.core
 
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
 /**
  * @brief 학습 세션의 핵심 비즈니스 로직을 처리하는 UseCase 클래스.
  */
@@ -45,14 +48,16 @@ class StudySessionUseCase {
     fun calculateTotalStudyTime(sessions: List<Session>): Long = sessions.sumOf { it.durationSec }
 }
 
+@Entity(tableName = "sessions")
 data class Session(
-    val id: Long,
+    @PrimaryKey val id: Long,
     val subjectId: Int,
     val durationSec: Long
 )
 
+@Entity(tableName = "subjects")
 data class Subject(
-    val id: Int,
+    @PrimaryKey val id: Int,
     val name: String,
     val colorHex: String,
     val targetPercent: Int
