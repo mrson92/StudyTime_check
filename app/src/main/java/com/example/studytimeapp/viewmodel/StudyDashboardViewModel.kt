@@ -31,6 +31,7 @@ class StudyDashboardViewModel(private val studyDao: StudyDao) : ViewModel() {
 
     data class TimerState(
         val isRunning: Boolean = false,
+        val isPaused: Boolean = false,
         val subjectId: Int? = null,
         val subjectName: String = "",
         val elapsedSec: Long = 0L
@@ -86,9 +87,13 @@ class StudyDashboardViewModel(private val studyDao: StudyDao) : ViewModel() {
         val name = subject?.name ?: "알 수 없는 과목"
 
         _timerState.update { 
-            TimerState(isRunning = true, subjectId = subjectId, subjectName = name) 
+            TimerState(isRunning = true, isPaused = false, subjectId = subjectId, subjectName = name) 
         }
         
+        startTimerJob()
+    }
+
+    private fun startTimerJob() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
             while (true) {
@@ -98,6 +103,16 @@ class StudyDashboardViewModel(private val studyDao: StudyDao) : ViewModel() {
                 }
             }
         }
+    }
+
+    fun pauseTimer() {
+        timerJob?.cancel()
+        _timerState.update { it.copy(isPaused = true) }
+    }
+
+    fun resumeTimer() {
+        _timerState.update { it.copy(isPaused = false) }
+        startTimerJob()
     }
 
     fun stopTimer() {
